@@ -3,6 +3,7 @@ import re
 import json
 import time
 import zipfile
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -541,4 +542,8 @@ def worker_loop():
             clear_processing()
 
 if __name__ == "__main__":
-    worker_loop()
+    if "--init-session" in sys.argv:
+        ensure_session()
+        print("Rubika session initialization completed.")
+    else:
+        worker_loop()

@@ -126,6 +126,14 @@ echo ".env file generated successfully."
 mkdir -p "downloads" "downloads/url" "queue"
 chown -R "${RUN_USER}:${RUN_USER}" "${PROJECT_ROOT}"
 
+echo
+echo "Initializing Rubika session (first run may ask phone/code)..."
+if command -v runuser >/dev/null 2>&1; then
+  runuser -u "${RUN_USER}" -- "${VENV_PYTHON}" "${PROJECT_ROOT}/rub.py" --init-session
+else
+  su - "${RUN_USER}" -s /bin/bash -c "cd '${PROJECT_ROOT}' && '${VENV_PYTHON}' '${PROJECT_ROOT}/rub.py' --init-session"
+fi
+
 echo "Creating systemd service: ${SERVICE_NAME}"
 cat > "${SERVICE_FILE}" <<EOF
 [Unit]
