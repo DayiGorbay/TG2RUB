@@ -13,7 +13,7 @@ import requests
 import pyzipper
 from urllib.parse import urlparse
 import threading
-from bale import send_bale_with_retry, BALE_MAX_FILE_SIZE
+from bale import send_bale_with_retry, BALE_MAX_FILE_SIZE, BALE_ADMIN_CHAT_ID, get_bale_approved_users
 
 load_dotenv()
 
@@ -504,7 +504,20 @@ def process_task(task: dict):
                         f"اندازه فایل برای بله بیش از حد مجاز است "
                         f"({pretty_size(size_bytes)} > {pretty_size(BALE_MAX_FILE_SIZE)})."
                     )
-                send_bale_with_retry(str(target_path), part_caption, task)
+                bale_targets = task.get("bale_targets")
+                target_ids: list[str] = []
+                if isinstance(bale_targets, list) and bale_targets:
+                    target_ids = [str(item) for item in bale_targets if str(item).strip()]
+                elif task.get("bale_send_all"):
+                    target_ids = [str(uid) for uid in get_bale_approved_users()]
+                elif BALE_ADMIN_CHAT_ID:
+                    target_ids = [str(BALE_ADMIN_CHAT_ID)]
+
+                if not target_ids:
+                    raise RuntimeError("گیرنده‌ای برای ارسال به بله تعیین نشده است.")
+
+                for bale_chat_id in target_ids:
+                    send_bale_with_retry(str(target_path), bale_chat_id, part_caption, task)
 
         push_status(
             task,

@@ -31,6 +31,7 @@ CANCEL_FILE = QUEUE_DIR / "cancelled.jsonl"
 APPROVED_USERS_FILE = QUEUE_DIR / "approved_users.json"
 ACCESS_REQUESTS_FILE = QUEUE_DIR / "access_requests.json"
 PENDING_DEST_FILE = QUEUE_DIR / "pending_destinations.json"
+BALE_APPROVED_USERS_FILE = QUEUE_DIR / "bale_approved_users.json"
 BALE_MAX_FILE_SIZE = 50 * 1024 * 1024
 SPLIT_THRESHOLD_BYTES = int(1.5 * 1024 * 1024 * 1024)
 SPLIT_PART_BYTES = 500 * 1024 * 1024
@@ -219,6 +220,32 @@ def force_rubika_keyboard(draft_id: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("🟨↩️ برگشت به انتخاب مقصد", callback_data=f"dest_menu_{draft_id}")],
         ]
     )
+
+
+def load_bale_approved_users() -> list[int]:
+    try:
+        if BALE_APPROVED_USERS_FILE.exists():
+            data = json.loads(BALE_APPROVED_USERS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                result = []
+                for item in data:
+                    try:
+                        result.append(int(item))
+                    except Exception:
+                        continue
+                return sorted(set(result))
+    except Exception:
+        pass
+    return []
+
+
+def bale_target_keyboard(draft_id: str, user_ids: list[int]) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton("🟢 ارسال به همه تاییدشده‌های بله", callback_data=f"btarget_all_{draft_id}")]]
+    rows.append([InlineKeyboardButton("👤 ارسال به مدیر بله", callback_data=f"btarget_admin_{draft_id}")])
+    for uid in user_ids[:10]:
+        rows.append([InlineKeyboardButton(f"👤 ارسال به {uid}", callback_data=f"btarget_user_{uid}_{draft_id}")])
+    rows.append([InlineKeyboardButton("↩️ بازگشت به انتخاب مقصد", callback_data=f"dest_menu_{draft_id}")])
+    return InlineKeyboardMarkup(rows)
 
 
 def load_pending_destinations() -> dict[str, dict]:
@@ -729,6 +756,28 @@ async def destination_select_handler(client: Client, callback_query: CallbackQue
             return
 
     task["destination"] = destination
+
+    if destination in ("bale", "both"):
+        bale_users = load_bale_approved_users()
+        if not bale_users:
+            await callback_query.answer("هنوز کاربر تاییدشده‌ای در ربات بله وجود ندارد.", show_alert=True)
+            await callback_query.message.edit_text(
+                "هیچ کاربر تاییدشده‌ای در بله پیدا نشد.\n"
+                "ابتدا کاربران را در ربات بله تایید کنید.",
+                reply_markup=force_rubika_keyboard(draft_id),
+            )
+            return
+        task["destination"] = destination
+        draft["task"] = task
+        drafts[draft_id] = draft
+        save_pending_destinations(drafts)
+        await callback_query.message.edit_text(
+            "لطفا گیرنده فایل در بله را انتخاب کنید:",
+            reply_markup=bale_target_keyboard(draft_id, bale_users),
+        )
+        await callback_query.answer()
+        return
+
     queue.push(task)
 
     drafts.pop(draft_id, None)
@@ -776,6 +825,68 @@ async def destination_menu_handler(client: Client, callback_query: CallbackQuery
         reply_markup=destination_keyboard(draft_id),
     )
     await callback_query.answer()
+
+
+@app.on_callback_query(filters.regex(r"^btarget_(all|admin)_\d+$|^btarget_user_\d+_\d+$"))
+async def bale_target_handler(client: Client, callback_query: CallbackQuery):
+    user = callback_query.from_user
+    if not user:
+        await callback_query.answer("خطا در دریافت اطلاعات کاربر.", show_alert=True)
+        return
+
+    data = callback_query.data or ""
+    parts = data.split("_")
+    if parts[1] == "user":
+        target_user_id = int(parts[2])
+        draft_id = parts[3]
+        mode = "user"
+    else:
+        mode = parts[1]
+        target_user_id = None
+        draft_id = parts[2]
+
+    drafts = load_pending_destinations()
+    draft = drafts.get(draft_id)
+    if not draft:
+        await callback_query.answer("این درخواست منقضی یا حذف شده است.", show_alert=True)
+        return
+
+    owner_user_id = int(draft.get("owner_user_id", 0))
+    if user.id != owner_user_id and user.id != ADMIN_TELEGRAM_ID:
+        await callback_query.answer("فقط صاحب فایل می‌تواند گیرنده را انتخاب کند.", show_alert=True)
+        return
+
+    task = draft.get("task", {})
+    if mode == "all":
+        task["bale_send_all"] = True
+        task["bale_targets"] = []
+        target_text = "همه کاربران تاییدشده بله"
+    elif mode == "admin":
+        from bale import BALE_ADMIN_CHAT_ID
+        if not BALE_ADMIN_CHAT_ID:
+            await callback_query.answer("BALE_ADMIN_CHAT_ID تنظیم نشده است.", show_alert=True)
+            return
+        task["bale_send_all"] = False
+        task["bale_targets"] = [str(BALE_ADMIN_CHAT_ID)]
+        target_text = f"مدیر بله (`{BALE_ADMIN_CHAT_ID}`)"
+    else:
+        task["bale_send_all"] = False
+        task["bale_targets"] = [str(target_user_id)]
+        target_text = f"`{target_user_id}`"
+
+    queue.push(task)
+    drafts.pop(draft_id, None)
+    save_pending_destinations(drafts)
+
+    await callback_query.message.edit_text(
+        "در صف قرار گرفت.\n\n"
+        f"مقصد: `{task.get('destination')}`\n"
+        f"گیرنده بله: {target_text}\n"
+        f"شناسه: `{task['job_id']}`\n"
+        "برای حذف این مورد از صف:\n"
+        f"`/del {task['job_id']}`"
+    )
+    await callback_query.answer("گیرنده بله ثبت شد.")
 
 @app.on_message(filters.private & filters.command("safemode"))
 async def safemode_handler(client: Client, message: Message):
