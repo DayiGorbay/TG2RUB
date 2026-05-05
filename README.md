@@ -156,3 +156,10 @@ Short name: t2r
 4. فایل بر اساس مقصد انتخابی در صف پردازش می‌شود
 5. فایل به مقصد انتخاب شده ارسال میشود
 ---
+
+## 📞 ارتباط با من
+
+- 🌐 Website: [maliyaqubi.ir](https://maliyaqubi.ir)
+- 💬 Telegram: [@dayigorbay](https://t.me/dayigorbay)
+- 📸 Instagram: [@aliyaqubi88](https://www.instagram.com/aliyaqubi88/)
+- 📧 Email: maliyaqubi2009@gmail.com
