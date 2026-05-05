@@ -501,6 +501,8 @@ async def download_progress(current, total, status_message, file_name, started_a
 
 async def status_watcher():
     pos = 0
+    last_edit: dict[tuple[int, int], float] = {}
+    last_text: dict[tuple[int, int], str] = {}
     while True:
         await asyncio.sleep(1)
         if not STATUS_FILE.exists():
@@ -513,17 +515,35 @@ async def status_watcher():
             for line in lines:
                 if not line.strip():
                     continue
-                data = json.loads(line)
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
                 chat_id = data.get("chat_id")
                 msg_id = data.get("message_id")
                 text = data.get("text", "")
                 percent = data.get("percent")
                 if not chat_id or not msg_id:
                     continue
+                key = (int(chat_id), int(msg_id))
+                now = time.time()
+                if now - last_edit.get(key, 0) < 1.2:
+                    continue
+
                 if percent is not None:
-                    text += f"\n\n`{progress_bar(float(percent))}` `{float(percent):.1f}%`"
+                    try:
+                        p = float(percent)
+                        if 0 <= p <= 100:
+                            text += f"\n\n`{progress_bar(p)}` `{p:.1f}%`"
+                    except Exception:
+                        pass
+
+                if last_text.get(key) == text:
+                    continue
                 try:
                     await app.edit_message_text(chat_id, msg_id, text)
+                    last_edit[key] = now
+                    last_text[key] = text
                 except Exception:
                     pass
         except Exception:

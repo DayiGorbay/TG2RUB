@@ -87,6 +87,7 @@ def eta_text(seconds) -> str:
 
 def push_status(task: dict, text: str, status: str = "working", percent: float | None = None):
     payload = {
+        "job_id": task.get("job_id"),
         "chat_id": task.get("chat_id"),
         "message_id": task.get("status_message_id"),
         "status": status,
@@ -215,10 +216,16 @@ def send_with_retry(file_path: str, caption: str = "", task: dict | None = None)
 
         try:
             if task:
+                phase = (task.get("phase") or "").strip()
+                phase_title = {
+                    "rubika": "🟦 روبیکا",
+                    "bale": "🟨 بله",
+                }.get(phase, "🔼 آپلود")
                 push_status(
                     task,
-                    f"🔼 در حال آپلود در روبیکا...\n\n"
+                    f"{phase_title}: در حال ارسال...\n\n"
                     f"🔴 تلاش {attempt} از {MAX_RETRIES}\n\n"
+                    f"⏱ محدودیت تلاش: {get_per_attempt_timeout(file_path)}s\n\n"
                     f"برای لغو ارسال:\n"
                     f"`/del {task.get('job_id')}`",
                     "uploading"
@@ -495,7 +502,22 @@ def process_task(task: dict):
                 part_caption = f"{caption or ''}\nPart {index}/{len(send_targets)}".strip()
 
             if destination in ("rubika", "both"):
+                task["phase"] = "rubika"
+                push_status(
+                    task,
+                    f"🟦 شروع ارسال به روبیکا...\n\n"
+                    f"فایل: `{target_path.name}`\n"
+                    f"حجم: `{pretty_size(target_path.stat().st_size)}`"
+                    + (f"\nپارت: `{index}/{len(send_targets)}`" if len(send_targets) > 1 else ""),
+                    "uploading",
+                )
                 send_with_retry(str(target_path), part_caption, task)
+                push_status(
+                    task,
+                    f"✅ ارسال روبیکا انجام شد.\n\n"
+                    + (f"پارت: `{index}/{len(send_targets)}`" if len(send_targets) > 1 else "آماده مرحله بعد..."),
+                    "uploading",
+                )
 
             if destination in ("bale", "both"):
                 size_bytes = target_path.stat().st_size
@@ -517,7 +539,24 @@ def process_task(task: dict):
                     raise RuntimeError("گیرنده‌ای برای ارسال به بله تعیین نشده است.")
 
                 for bale_chat_id in target_ids:
+                    task["phase"] = "bale"
+                    push_status(
+                        task,
+                        f"🟨 شروع ارسال به بله...\n\n"
+                        f"گیرنده: `{bale_chat_id}`\n"
+                        f"فایل: `{target_path.name}`\n"
+                        f"حجم: `{pretty_size(size_bytes)}`"
+                        + (f"\nپارت: `{index}/{len(send_targets)}`" if len(send_targets) > 1 else ""),
+                        "uploading",
+                    )
                     send_bale_with_retry(str(target_path), bale_chat_id, part_caption, task)
+                    push_status(
+                        task,
+                        f"✅ ارسال بله انجام شد.\n\n"
+                        f"گیرنده: `{bale_chat_id}`"
+                        + (f"\nپارت: `{index}/{len(send_targets)}`" if len(send_targets) > 1 else ""),
+                        "uploading",
+                    )
 
         push_status(
             task,
