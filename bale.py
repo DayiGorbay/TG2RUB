@@ -143,6 +143,35 @@ def add_bale_approved_user(user_id: int) -> None:
     save_json(BALE_APPROVED_USERS_FILE, sorted(users))
 
 
+def remove_bale_approved_user(user_id: int) -> bool:
+    users = set(get_bale_approved_users())
+    if int(user_id) not in users:
+        return False
+    users.remove(int(user_id))
+    save_json(BALE_APPROVED_USERS_FILE, sorted(users))
+    return True
+
+
+def setup_bale_bot_commands():
+    # طبق API مشابه تلگرام: setMyCommands
+    try:
+        bale_api_call(
+            "setMyCommands",
+            payload={
+                "commands": [
+                    {"command": "start", "description": "شروع ربات"},
+                    {"command": "request", "description": "درخواست دسترسی"},
+                    {"command": "users", "description": "لیست کاربران (مدیر)"},
+                    {"command": "deluser", "description": "حذف کاربر (مدیر)"},
+                ]
+            },
+            timeout=(10, 30),
+        )
+    except Exception:
+        # اگر متد در نسخه API فعال نبود، مشکلی در عملکرد ربات ایجاد نمی‌کند
+        pass
+
+
 def get_last_update_id() -> int:
     state = load_json(BALE_STATE_FILE, {})
     return int(state.get("last_update_id", 0))
@@ -157,6 +186,7 @@ def run_bale_dashboard_loop():
         print("Bale dashboard disabled: BALE_BOT_TOKEN or BALE_ADMIN_CHAT_ID missing.")
         return
 
+    setup_bale_bot_commands()
     print("Bale dashboard started.")
     while True:
         try:
@@ -192,6 +222,13 @@ def run_bale_dashboard_loop():
                         continue
 
                     if from_id != int(BALE_ADMIN_CHAT_ID):
+                        continue
+                    if data.startswith("bale_deluser_"):
+                        uid = int(data.split("_")[-1])
+                        if remove_bale_approved_user(uid):
+                            send_bale_text(BALE_ADMIN_CHAT_ID, f"🗑 کاربر `{uid}` حذف شد.")
+                        else:
+                            send_bale_text(BALE_ADMIN_CHAT_ID, f"این کاربر در لیست نبود: `{uid}`")
                         continue
                     if data.startswith("bale_approve_"):
                         uid = int(data.split("_")[-1])
@@ -239,6 +276,28 @@ def run_bale_dashboard_loop():
                             "inline_keyboard": [[{"text": "✅ درخواست دسترسی", "callback_data": f"bale_req_{user_id}"}]]
                         }
                         send_bale_text(chat_id, "این ربات خصوصی است. برای دسترسی درخواست ارسال کنید.", keyboard)
+                elif text.lower().startswith("/users") and user_id == int(BALE_ADMIN_CHAT_ID):
+                    approved = get_bale_approved_users()
+                    preview = "\n".join([f"- `{uid}`" for uid in approved[:50]]) or "- موردی وجود ندارد"
+                    send_bale_text(
+                        BALE_ADMIN_CHAT_ID,
+                        "👥 لیست کاربران تاییدشده بله\n\n"
+                        f"تعداد: `{len(approved)}`\n\n"
+                        f"{preview}\n\n"
+                        "برای حذف کاربر:\n`/deluser <id>`",
+                    )
+                elif text.lower().startswith("/deluser") and user_id == int(BALE_ADMIN_CHAT_ID):
+                    parts = text.split(maxsplit=1)
+                    if len(parts) < 2 or not parts[1].strip().isdigit():
+                        send_bale_text(BALE_ADMIN_CHAT_ID, "فرمت صحیح: `/deluser USER_ID`")
+                    else:
+                        uid = int(parts[1].strip())
+                        if uid == int(BALE_ADMIN_CHAT_ID):
+                            send_bale_text(BALE_ADMIN_CHAT_ID, "حذف مدیر مجاز نیست.")
+                        elif remove_bale_approved_user(uid):
+                            send_bale_text(BALE_ADMIN_CHAT_ID, f"🗑 کاربر `{uid}` حذف شد.")
+                        else:
+                            send_bale_text(BALE_ADMIN_CHAT_ID, f"این کاربر در لیست نبود: `{uid}`")
                 elif text.lower() in ("/request", "request"):
                     requests_data = load_json(BALE_REQUESTS_FILE, {})
                     requests_data[str(user_id)] = {"status": "pending", "requested_at": int(time.time())}
