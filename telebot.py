@@ -297,7 +297,9 @@ def force_rubika_keyboard(draft_id: str) -> InlineKeyboardMarkup:
 def bale_target_keyboard(draft_id: str, user_ids: list[int]) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton("🟢 ارسال به همه تاییدشده‌های بله", callback_data=f"btarget_all_{draft_id}")]]
     rows.append([InlineKeyboardButton("👤 ارسال به مدیر بله", callback_data=f"btarget_admin_{draft_id}")])
-    for uid in user_ids[:10]:
+    admin_id = int(BALE_ADMIN_CHAT_ID) if BALE_ADMIN_CHAT_ID.isdigit() else None
+    visible_users = [uid for uid in user_ids if uid != admin_id]
+    for uid in visible_users[:10]:
         rows.append([InlineKeyboardButton(f"👤 ارسال به {uid}", callback_data=f"btarget_user_{uid}_{draft_id}")])
     rows.append([InlineKeyboardButton("↩️ بازگشت به انتخاب مقصد", callback_data=f"dest_menu_{draft_id}")])
     return InlineKeyboardMarkup(rows)

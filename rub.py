@@ -536,6 +536,7 @@ def process_task(task: dict):
         total_send_bytes = sum(path.stat().st_size for path in send_targets)
         sent_rubika_bytes = 0
         sent_bale_bytes = 0
+        bale_targets_count = 0
 
         for index, target_path in enumerate(send_targets, start=1):
             part_caption = caption
@@ -582,6 +583,8 @@ def process_task(task: dict):
 
                 if not target_ids:
                     raise RuntimeError("گیرنده‌ای برای ارسال به بله تعیین نشده است.")
+                bale_targets_count = max(bale_targets_count, len(target_ids))
+                bale_total_bytes = total_send_bytes * bale_targets_count
 
                 for bale_chat_id in target_ids:
                     task["phase"] = "bale"
@@ -592,10 +595,21 @@ def process_task(task: dict):
                         f"فایل: `{target_path.name}`\n"
                         f"حجم: `{pretty_size(size_bytes)}`"
                         + (f"\nپارت: `{index}/{len(send_targets)}`" if len(send_targets) > 1 else "")
-                        + f"\nارسال‌شده: `{pretty_size(sent_bale_bytes)}` از `{pretty_size(total_send_bytes)}`",
+                        + f"\nارسال‌شده: `{pretty_size(sent_bale_bytes)}` از `{pretty_size(bale_total_bytes)}`",
                         "uploading",
                     )
-                    send_bale_with_retry(str(target_path), bale_chat_id, part_caption, task)
+                    try:
+                        send_bale_with_retry(str(target_path), bale_chat_id, part_caption, task)
+                    except Exception as e:
+                        push_status(
+                            task,
+                            f"❌ ارسال به بله ناموفق شد.\n\n"
+                            f"گیرنده: `{bale_chat_id}`\n"
+                            f"علت: `{str(e)}`\n"
+                            f"ارسال‌شده تا این لحظه: `{pretty_size(sent_bale_bytes)}` از `{pretty_size(bale_total_bytes)}`",
+                            "failed",
+                        )
+                        raise
                     sent_bale_bytes += size_bytes
                     inc_metric("bale_uploads", 1)
                     push_status(
@@ -603,12 +617,18 @@ def process_task(task: dict):
                         f"✅ ارسال بله انجام شد.\n\n"
                         f"گیرنده: `{bale_chat_id}`\n"
                         + (f"پارت: `{index}/{len(send_targets)}`\n" if len(send_targets) > 1 else "")
-                        + f"ارسال‌شده: `{pretty_size(sent_bale_bytes)}` از `{pretty_size(total_send_bytes)}`",
+                        + f"ارسال‌شده: `{pretty_size(sent_bale_bytes)}` از `{pretty_size(bale_total_bytes)}`",
                         "uploading",
                     )
 
         inc_metric("missions_success", 1)
-        push_status(task, "فایل با موفقیت ارسال شد.", "done")
+        push_status(
+            task,
+            "✅ ماموریت با موفقیت کامل شد.\n"
+            + (f"\nروبیکا: `{pretty_size(sent_rubika_bytes)}` از `{pretty_size(total_send_bytes)}`" if destination in ("rubika", "both") else "")
+            + (f"\nبله: `{pretty_size(sent_bale_bytes)}` از `{pretty_size(total_send_bytes * max(bale_targets_count,1))}`" if destination in ("bale", "both") else ""),
+            "done",
+        )
 
     finally:
         for path in cleanup_paths:
