@@ -7,7 +7,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from pyrogram import Client, filters
 from pyrogram.types import Message
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, BotCommand
 import asyncio
 import time
 from urllib.parse import urlparse
@@ -19,6 +19,7 @@ API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "").strip()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_TELEGRAM_ID = int(os.getenv("ADMIN_TELEGRAM_ID", "0"))
+BALE_ADMIN_CHAT_ID = os.getenv("BALE_ADMIN_CHAT_ID", "").strip()
 
 BASE_DIR = Path(__file__).resolve().parent
 DOWNLOAD_DIR = BASE_DIR / "downloads"
@@ -32,6 +33,7 @@ APPROVED_USERS_FILE = QUEUE_DIR / "approved_users.json"
 ACCESS_REQUESTS_FILE = QUEUE_DIR / "access_requests.json"
 PENDING_DEST_FILE = QUEUE_DIR / "pending_destinations.json"
 BALE_APPROVED_USERS_FILE = QUEUE_DIR / "bale_approved_users.json"
+METRICS_FILE = QUEUE_DIR / "metrics.json"
 BALE_MAX_FILE_SIZE = 50 * 1024 * 1024
 SPLIT_THRESHOLD_BYTES = int(1.5 * 1024 * 1024 * 1024)
 SPLIT_PART_BYTES = 500 * 1024 * 1024
@@ -116,9 +118,79 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("📤 ارسال فایل", callback_data="admin_send_file")],
             [InlineKeyboardButton("📝 درخواست‌ها", callback_data="admin_requests")],
             [InlineKeyboardButton("📊 وضعیت ربات", callback_data="admin_status")],
+            [InlineKeyboardButton("👥 کاربران تلگرام", callback_data="admin_users")],
+            [InlineKeyboardButton("🟨👥 کاربران بله", callback_data="admin_bale_users")],
             [InlineKeyboardButton("⚙️ Safe Mode", callback_data="admin_safemode_help")],
         ]
     )
+
+
+def load_metrics() -> dict:
+    try:
+        if METRICS_FILE.exists():
+            data = json.loads(METRICS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {
+        "tg_downloads": 0,
+        "url_downloads": 0,
+        "rubika_uploads": 0,
+        "bale_uploads": 0,
+        "missions_success": 0,
+        "missions_failed": 0,
+    }
+
+
+def save_metrics(data: dict) -> None:
+    METRICS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def inc_metric(key: str, amount: int = 1) -> None:
+    data = load_metrics()
+    try:
+        data[key] = int(data.get(key, 0)) + int(amount)
+    except Exception:
+        data[key] = int(amount)
+    save_metrics(data)
+
+
+def load_bale_approved_users() -> list[int]:
+    result: list[int] = []
+    try:
+        if BALE_APPROVED_USERS_FILE.exists():
+            data = json.loads(BALE_APPROVED_USERS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                for item in data:
+                    try:
+                        result.append(int(item))
+                    except Exception:
+                        continue
+    except Exception:
+        pass
+
+    try:
+        if BALE_ADMIN_CHAT_ID and BALE_ADMIN_CHAT_ID.isdigit():
+            result.append(int(BALE_ADMIN_CHAT_ID))
+    except Exception:
+        pass
+    return sorted(set(result))
+
+
+def save_bale_approved_users(user_ids: list[int]) -> None:
+    BALE_APPROVED_USERS_FILE.write_text(
+        json.dumps(sorted(set(int(u) for u in user_ids)), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def build_admin_users_keyboard(user_ids: list[int], prefix: str) -> InlineKeyboardMarkup:
+    rows = []
+    for uid in user_ids[:20]:
+        rows.append([InlineKeyboardButton(f"🗑 حذف {uid}", callback_data=f"{prefix}_del_{uid}")])
+    rows.append([InlineKeyboardButton("↩️ بازگشت", callback_data="admin_status")])
+    return InlineKeyboardMarkup(rows)
 
 
 def load_approved_users() -> set[int]:
@@ -220,23 +292,6 @@ def force_rubika_keyboard(draft_id: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("🟨↩️ برگشت به انتخاب مقصد", callback_data=f"dest_menu_{draft_id}")],
         ]
     )
-
-
-def load_bale_approved_users() -> list[int]:
-    try:
-        if BALE_APPROVED_USERS_FILE.exists():
-            data = json.loads(BALE_APPROVED_USERS_FILE.read_text(encoding="utf-8"))
-            if isinstance(data, list):
-                result = []
-                for item in data:
-                    try:
-                        result.append(int(item))
-                    except Exception:
-                        continue
-                return sorted(set(result))
-    except Exception:
-        pass
-    return []
 
 
 def bale_target_keyboard(draft_id: str, user_ids: list[int]) -> InlineKeyboardMarkup:
@@ -661,7 +716,7 @@ async def access_decision_handler(client: Client, callback_query: CallbackQuery)
     await callback_query.answer("درخواست رد شد.")
 
 
-@app.on_callback_query(filters.regex(r"^admin_(send_file|requests|status|safemode_help)$"))
+@app.on_callback_query(filters.regex(r"^admin_(send_file|requests|status|users|bale_users|safemode_help)$"))
 async def admin_panel_callbacks(client: Client, callback_query: CallbackQuery):
     if callback_query.from_user is None or callback_query.from_user.id != ADMIN_TELEGRAM_ID:
         await callback_query.answer("فقط مدیر می‌تواند این عملیات را انجام دهد.", show_alert=True)
@@ -705,6 +760,14 @@ async def admin_panel_callbacks(client: Client, callback_query: CallbackQuery):
         approved_users = load_approved_users()
         settings = load_settings()
         requests = load_access_requests()
+        metrics = load_metrics()
+        all_known_users = set(str(k) for k in requests.keys())
+        for uid in approved_users:
+            all_known_users.add(str(uid))
+        total_users = len(all_known_users)
+
+        downloads_count = int(metrics.get("tg_downloads", 0)) + int(metrics.get("url_downloads", 0))
+        uploads_count = int(metrics.get("rubika_uploads", 0)) + int(metrics.get("bale_uploads", 0))
         approved_non_admin = sorted([uid for uid in approved_users if uid != ADMIN_TELEGRAM_ID])
         approved_preview = "\n".join(
             [
@@ -718,13 +781,49 @@ async def admin_panel_callbacks(client: Client, callback_query: CallbackQuery):
             for item in user_settings.values():
                 if isinstance(item, dict) and item.get("safe_mode"):
                     users_with_safemode += 1
+
+        bale_users = load_bale_approved_users()
         await callback_query.message.edit_text(
             "📊 وضعیت ربات\n\n"
             f"در صف: `{len(tasks)}`\n"
             f"کاربران تاییدشده: `{max(len(approved_users) - 1, 0)}`\n"
+            f"کاربران کل (شناخته‌شده): `{total_users}`\n"
+            f"کاربران تاییدشده بله: `{len(bale_users)}`\n\n"
+            f"دانلودها: `{downloads_count}` (TG: `{metrics.get('tg_downloads',0)}` | URL: `{metrics.get('url_downloads',0)}`)\n"
+            f"آپلودها: `{uploads_count}` (Rubika: `{metrics.get('rubika_uploads',0)}` | Bale: `{metrics.get('bale_uploads',0)}`)\n"
+            f"ماموریت موفق: `{metrics.get('missions_success',0)}`\n"
+            f"ماموریت ناموفق: `{metrics.get('missions_failed',0)}`\n\n"
             f"کاربران با Safe Mode فعال: `{users_with_safemode}`\n\n"
             f"لیست کاربران تاییدشده:\n{approved_preview}",
             reply_markup=admin_panel_keyboard(),
+        )
+        await callback_query.answer()
+        return
+
+    if data == "admin_users":
+        approved = load_approved_users()
+        reqs = load_access_requests()
+        approved_non_admin = sorted([uid for uid in approved if uid != ADMIN_TELEGRAM_ID])
+        preview = "\n".join(
+            [f"- `{uid}` | {reqs.get(str(uid), {}).get('name', 'Unknown')}" for uid in approved_non_admin[:50]]
+        ) or "- موردی وجود ندارد"
+        await callback_query.message.edit_text(
+            "👥 کاربران تاییدشده تلگرام\n\n"
+            f"تعداد: `{len(approved_non_admin)}`\n\n"
+            f"{preview}",
+            reply_markup=build_admin_users_keyboard(approved_non_admin, "tuser"),
+        )
+        await callback_query.answer()
+        return
+
+    if data == "admin_bale_users":
+        bale_users = load_bale_approved_users()
+        preview = "\n".join([f"- `{uid}`" for uid in bale_users[:50]]) or "- موردی وجود ندارد"
+        await callback_query.message.edit_text(
+            "🟨👥 کاربران تاییدشده بله\n\n"
+            f"تعداد: `{len(bale_users)}`\n\n"
+            f"{preview}",
+            reply_markup=build_admin_users_keyboard(bale_users, "buser"),
         )
         await callback_query.answer()
         return
@@ -738,6 +837,49 @@ async def admin_panel_callbacks(client: Client, callback_query: CallbackQuery):
         reply_markup=admin_panel_keyboard(),
     )
     await callback_query.answer()
+
+
+@app.on_callback_query(filters.regex(r"^(tuser|buser)_del_\d+$"))
+async def admin_delete_user_callback(client: Client, callback_query: CallbackQuery):
+    if callback_query.from_user is None or callback_query.from_user.id != ADMIN_TELEGRAM_ID:
+        await callback_query.answer("فقط مدیر می‌تواند این عملیات را انجام دهد.", show_alert=True)
+        return
+
+    data = callback_query.data or ""
+    prefix, _, user_id_text = data.split("_", 2)
+    user_id = int(user_id_text)
+
+    if prefix == "tuser":
+        if user_id == ADMIN_TELEGRAM_ID:
+            await callback_query.answer("حذف مدیر مجاز نیست.", show_alert=True)
+            return
+        approved = load_approved_users()
+        if user_id not in approved:
+            await callback_query.answer("این کاربر در لیست تاییدشده نیست.", show_alert=True)
+            return
+        approved.remove(user_id)
+        save_approved_users(approved)
+        await callback_query.answer("کاربر تلگرام حذف شد.")
+        await callback_query.message.edit_text(
+            "✅ کاربر حذف شد.\n\nبرای مشاهده لیست جدید «👥 کاربران تلگرام» را بزنید.",
+            reply_markup=admin_panel_keyboard(),
+        )
+        return
+
+    bale_users = load_bale_approved_users()
+    if BALE_ADMIN_CHAT_ID and BALE_ADMIN_CHAT_ID.isdigit() and int(BALE_ADMIN_CHAT_ID) == user_id:
+        await callback_query.answer("حذف مدیر بله مجاز نیست.", show_alert=True)
+        return
+    if user_id not in bale_users:
+        await callback_query.answer("این کاربر در لیست بله نیست.", show_alert=True)
+        return
+    bale_users = [uid for uid in bale_users if uid != user_id]
+    save_bale_approved_users(bale_users)
+    await callback_query.answer("کاربر بله حذف شد.")
+    await callback_query.message.edit_text(
+        "✅ کاربر بله حذف شد.\n\nبرای مشاهده لیست جدید «🟨👥 کاربران بله» را بزنید.",
+        reply_markup=admin_panel_keyboard(),
+    )
 
 
 @app.on_callback_query(filters.regex(r"^dest_(rubika|bale|both)_\d+$"))
@@ -992,6 +1134,51 @@ async def clear_queue_handler(client: Client, message: Message):
     queue._mtime = 0
     await message.reply_text("تمام موارد در صف پاک شد.")
 
+
+@app.on_message(filters.private & filters.command("users"))
+async def users_handler(client: Client, message: Message):
+    if message.from_user is None or message.from_user.id != ADMIN_TELEGRAM_ID:
+        await message.reply_text("فقط مدیر می‌تواند این لیست را ببیند.")
+        return
+
+    approved = load_approved_users()
+    reqs = load_access_requests()
+    approved_non_admin = sorted([uid for uid in approved if uid != ADMIN_TELEGRAM_ID])
+    preview = "\n".join(
+        [f"- `{uid}` | {reqs.get(str(uid), {}).get('name', 'Unknown')}" for uid in approved_non_admin[:50]]
+    ) or "- موردی وجود ندارد"
+    await message.reply_text(
+        "👥 کاربران تاییدشده تلگرام\n\n"
+        f"تعداد: `{len(approved_non_admin)}`\n\n"
+        f"{preview}",
+        reply_markup=build_admin_users_keyboard(approved_non_admin, "tuser"),
+    )
+
+
+@app.on_message(filters.private & filters.command("deluser"))
+async def deluser_handler(client: Client, message: Message):
+    if message.from_user is None or message.from_user.id != ADMIN_TELEGRAM_ID:
+        await message.reply_text("فقط مدیر می‌تواند کاربر حذف کند.")
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip().isdigit():
+        await message.reply_text("فرمت صحیح: `/deluser USER_ID`")
+        return
+
+    uid = int(parts[1].strip())
+    if uid == ADMIN_TELEGRAM_ID:
+        await message.reply_text("حذف مدیر مجاز نیست.")
+        return
+
+    approved = load_approved_users()
+    if uid not in approved:
+        await message.reply_text("این کاربر در لیست تاییدشده نیست.")
+        return
+    approved.remove(uid)
+    save_approved_users(approved)
+    await message.reply_text(f"✅ کاربر `{uid}` حذف شد.")
+
 @app.on_message(filters.private & filters.command("del"))
 async def delete_one_handler(client: Client, message: Message):
     if not await require_approved_user(message):
@@ -1068,7 +1255,7 @@ async def delete_one_handler(client: Client, message: Message):
         return
 
 
-@app.on_message(filters.private & filters.text & ~filters.command(["start", "safemode", "del", "delall"]))
+@app.on_message(filters.private & filters.text & ~filters.command(["start", "safemode", "del", "delall", "users", "deluser"]))
 async def text_handler(client: Client, message: Message):
     global waiting_for_zip_password, waiting_password_for_user_id
 
@@ -1172,6 +1359,7 @@ async def media_handler(client: Client, message: Message):
             raise RuntimeError("Downloaded file not found.")
 
         file_size = downloaded_path.stat().st_size
+        inc_metric("tg_downloads", 1)
         user_settings = get_user_settings(message.from_user.id if message.from_user else 0)
 
         task = {
@@ -1204,9 +1392,25 @@ def clear_old_status():
     except Exception:
         pass
 
+
+async def setup_bot_commands():
+    commands = [
+        BotCommand("start", "شروع ربات"),
+        BotCommand("safemode", "مدیریت Safe Mode"),
+        BotCommand("del", "حذف یک ماموریت"),
+        BotCommand("delall", "حذف کل صف (مدیر)"),
+        BotCommand("users", "لیست کاربران تاییدشده (مدیر)"),
+        BotCommand("deluser", "حذف کاربر تاییدشده (مدیر)"),
+    ]
+    try:
+        await app.set_bot_commands(commands)
+    except Exception:
+        pass
+
 if __name__ == "__main__":
     clear_old_status()
     app.start()
+    app.loop.run_until_complete(setup_bot_commands())
     app.loop.create_task(status_watcher())
     idle()
     app.stop()

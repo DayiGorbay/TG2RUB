@@ -28,6 +28,7 @@ FAILED_FILE = QUEUE_DIR / "failed.jsonl"
 STATUS_FILE = QUEUE_DIR / "status.jsonl"
 URL_DIR = DOWNLOAD_DIR / "url"
 CANCEL_FILE = QUEUE_DIR / "cancelled.jsonl"
+METRICS_FILE = QUEUE_DIR / "metrics.json"
 
 MAX_RETRIES = 5
 UPLOAD_TIMEOUT = 1800
@@ -38,6 +39,37 @@ SPLIT_PART_BYTES = 500 * 1024 * 1024
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 QUEUE_DIR.mkdir(parents=True, exist_ok=True)
 URL_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def load_metrics() -> dict:
+    try:
+        if METRICS_FILE.exists():
+            data = json.loads(METRICS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {
+        "tg_downloads": 0,
+        "url_downloads": 0,
+        "rubika_uploads": 0,
+        "bale_uploads": 0,
+        "missions_success": 0,
+        "missions_failed": 0,
+    }
+
+
+def save_metrics(data: dict) -> None:
+    METRICS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def inc_metric(key: str, amount: int = 1) -> None:
+    data = load_metrics()
+    try:
+        data[key] = int(data.get(key, 0)) + int(amount)
+    except Exception:
+        data[key] = int(amount)
+    save_metrics(data)
 
 
 def safe_filename(name: Optional[str]) -> str:
@@ -381,6 +413,7 @@ def download_url(task: dict) -> Path:
 
     task["file_name"] = target.name
     task["file_size"] = target.stat().st_size
+    inc_metric("url_downloads", 1)
     return target
 
 def make_zip_with_password(file_path: Path, password: str) -> Path:
@@ -512,6 +545,7 @@ def process_task(task: dict):
                     "uploading",
                 )
                 send_with_retry(str(target_path), part_caption, task)
+                inc_metric("rubika_uploads", 1)
                 push_status(
                     task,
                     f"✅ ارسال روبیکا انجام شد.\n\n"
@@ -550,6 +584,7 @@ def process_task(task: dict):
                         "uploading",
                     )
                     send_bale_with_retry(str(target_path), bale_chat_id, part_caption, task)
+                    inc_metric("bale_uploads", 1)
                     push_status(
                         task,
                         f"✅ ارسال بله انجام شد.\n\n"
@@ -558,11 +593,8 @@ def process_task(task: dict):
                         "uploading",
                     )
 
-        push_status(
-            task,
-            "فایل با موفقیت ارسال شد.",
-            "done"
-        )
+        inc_metric("missions_success", 1)
+        push_status(task, "فایل با موفقیت ارسال شد.", "done")
 
     finally:
         for path in cleanup_paths:
@@ -588,6 +620,7 @@ def worker_loop():
         try:
             process_task(task)
         except Exception as e:
+            inc_metric("missions_failed", 1)
             append_failed(task, str(e))
             push_status(task, f"خطا: {str(e)}", "failed")
         finally:

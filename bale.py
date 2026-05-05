@@ -172,6 +172,24 @@ def setup_bale_bot_commands():
         pass
 
 
+def bale_admin_keyboard() -> dict:
+    return {
+        "inline_keyboard": [
+            [{"text": "📊 وضعیت", "callback_data": "bale_menu_status"}],
+            [{"text": "👥 کاربران", "callback_data": "bale_menu_users"}],
+            [{"text": "📝 درخواست‌ها", "callback_data": "bale_menu_requests"}],
+        ]
+    }
+
+
+def bale_users_keyboard(user_ids: list[int]) -> dict:
+    rows = []
+    for uid in user_ids[:20]:
+        rows.append([{"text": f"🗑 حذف {uid}", "callback_data": f"bale_deluser_{uid}"}])
+    rows.append([{"text": "↩️ بازگشت", "callback_data": "bale_menu_status"}])
+    return {"inline_keyboard": rows}
+
+
 def get_last_update_id() -> int:
     state = load_json(BALE_STATE_FILE, {})
     return int(state.get("last_update_id", 0))
@@ -223,6 +241,40 @@ def run_bale_dashboard_loop():
 
                     if from_id != int(BALE_ADMIN_CHAT_ID):
                         continue
+                    if data == "bale_menu_status":
+                        approved = get_bale_approved_users()
+                        preview = "\n".join([f"- `{uid}`" for uid in approved[:20]]) or "- موردی وجود ندارد"
+                        send_bale_text(
+                            BALE_ADMIN_CHAT_ID,
+                            "📊 داشبورد مدیر بله\n\n"
+                            f"تعداد کاربران تاییدشده: `{len(approved)}`\n\n"
+                            f"لیست کاربران:\n{preview}",
+                            bale_admin_keyboard(),
+                        )
+                        continue
+                    if data == "bale_menu_users":
+                        approved = get_bale_approved_users()
+                        preview = "\n".join([f"- `{uid}`" for uid in approved[:50]]) or "- موردی وجود ندارد"
+                        send_bale_text(
+                            BALE_ADMIN_CHAT_ID,
+                            "👥 کاربران تاییدشده بله\n\n"
+                            f"تعداد: `{len(approved)}`\n\n"
+                            f"{preview}",
+                            bale_users_keyboard(approved),
+                        )
+                        continue
+                    if data == "bale_menu_requests":
+                        requests_data = load_json(BALE_REQUESTS_FILE, {})
+                        pending = [uid for uid, item in requests_data.items() if item.get("status") == "pending"]
+                        pending_preview = "\n".join([f"- `{uid}`" for uid in pending[:30]]) or "- موردی وجود ندارد"
+                        send_bale_text(
+                            BALE_ADMIN_CHAT_ID,
+                            "📝 درخواست‌های در انتظار بله\n\n"
+                            f"تعداد: `{len(pending)}`\n\n"
+                            f"{pending_preview}",
+                            bale_admin_keyboard(),
+                        )
+                        continue
                     if data.startswith("bale_deluser_"):
                         uid = int(data.split("_")[-1])
                         if remove_bale_approved_user(uid):
@@ -268,6 +320,7 @@ def run_bale_dashboard_loop():
                             "📊 داشبورد مدیر بله\n\n"
                             f"تعداد کاربران تاییدشده: `{len(approved)}`\n\n"
                             f"لیست کاربران:\n{preview}",
+                            bale_admin_keyboard(),
                         )
                     elif user_id in get_bale_approved_users():
                         send_bale_text(chat_id, "✅ شما قبلا تایید شده‌اید.")
