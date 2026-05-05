@@ -319,17 +319,48 @@ def was_deleted(job_id=None, message_id=None) -> bool:
 def load_settings() -> dict:
     try:
         if SETTINGS_FILE.exists():
-            return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+            data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
     except Exception:
         pass
 
-    return {"safe_mode": False, "zip_password": ""}
+    return {"safe_mode": False, "zip_password": "", "user_settings": {}}
 
 def save_settings(data: dict):
     SETTINGS_FILE.write_text(
         json.dumps(data, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
+
+
+def get_user_settings(user_id: int) -> dict:
+    settings = load_settings()
+    user_settings_map = settings.get("user_settings")
+    if not isinstance(user_settings_map, dict):
+        user_settings_map = {}
+
+    user_settings = user_settings_map.get(str(user_id))
+    if not isinstance(user_settings, dict):
+        user_settings = {}
+
+    safe_mode = bool(user_settings.get("safe_mode", settings.get("safe_mode", False)))
+    zip_password = str(user_settings.get("zip_password", settings.get("zip_password", "")))
+    return {"safe_mode": safe_mode, "zip_password": zip_password}
+
+
+def update_user_settings(user_id: int, safe_mode: bool, zip_password: str = "") -> None:
+    settings = load_settings()
+    user_settings_map = settings.get("user_settings")
+    if not isinstance(user_settings_map, dict):
+        user_settings_map = {}
+
+    user_settings_map[str(user_id)] = {
+        "safe_mode": bool(safe_mode),
+        "zip_password": zip_password or "",
+    }
+    settings["user_settings"] = user_settings_map
+    save_settings(settings)
 
 def is_direct_url(text: str) -> bool:
     if not text:
@@ -626,11 +657,26 @@ async def admin_panel_callbacks(client: Client, callback_query: CallbackQuery):
         tasks = queue.all()
         approved_users = load_approved_users()
         settings = load_settings()
+        requests = load_access_requests()
+        approved_non_admin = sorted([uid for uid in approved_users if uid != ADMIN_TELEGRAM_ID])
+        approved_preview = "\n".join(
+            [
+                f"- `{uid}` | {requests.get(str(uid), {}).get('name', 'Unknown')}"
+                for uid in approved_non_admin[:20]
+            ]
+        ) or "- موردی وجود ندارد"
+        users_with_safemode = 0
+        user_settings = settings.get("user_settings")
+        if isinstance(user_settings, dict):
+            for item in user_settings.values():
+                if isinstance(item, dict) and item.get("safe_mode"):
+                    users_with_safemode += 1
         await callback_query.message.edit_text(
             "📊 وضعیت ربات\n\n"
             f"در صف: `{len(tasks)}`\n"
             f"کاربران تاییدشده: `{max(len(approved_users) - 1, 0)}`\n"
-            f"Safe Mode: `{'ON' if settings.get('safe_mode') else 'OFF'}`",
+            f"کاربران با Safe Mode فعال: `{users_with_safemode}`\n\n"
+            f"لیست کاربران تاییدشده:\n{approved_preview}",
             reply_markup=admin_panel_keyboard(),
         )
         await callback_query.answer()
@@ -638,6 +684,7 @@ async def admin_panel_callbacks(client: Client, callback_query: CallbackQuery):
 
     await callback_query.message.edit_text(
         "⚙️ مدیریت Safe Mode\n\n"
+        "هر کاربر تاییدشده می‌تواند Safe Mode شخصی خود را تنظیم کند.\n\n"
         "برای تنظیم Safe Mode از دستورات زیر استفاده کنید:\n"
         "`/safemode on`\n"
         "`/safemode off`",
@@ -733,8 +780,9 @@ async def destination_menu_handler(client: Client, callback_query: CallbackQuery
 @app.on_message(filters.private & filters.command("safemode"))
 async def safemode_handler(client: Client, message: Message):
     global waiting_for_zip_password, waiting_password_for_user_id
-    if message.from_user is None or message.from_user.id != ADMIN_TELEGRAM_ID:
-        await message.reply_text("فقط مدیر می‌تواند این دستور را اجرا کند.")
+    if message.from_user is None:
+        return
+    if not await require_approved_user(message):
         return
 
     args = message.text.split(maxsplit=1)
@@ -744,13 +792,13 @@ async def safemode_handler(client: Client, message: Message):
         return
 
     action = args[1].strip().lower()
-    settings = load_settings()
+    user_id = message.from_user.id
+    current = get_user_settings(user_id)
 
     if action == "on":
-        settings["safe_mode"] = True
-        save_settings(settings)
+        update_user_settings(user_id, True, current.get("zip_password", ""))
         waiting_for_zip_password = True
-        waiting_password_for_user_id = message.from_user.id
+        waiting_password_for_user_id = user_id
 
         await message.reply_text(
             "Safe Mode فعال شد.\n\n"
@@ -760,11 +808,10 @@ async def safemode_handler(client: Client, message: Message):
         return
 
     if action == "off":
-        settings["safe_mode"] = False
-        settings["zip_password"] = ""
-        save_settings(settings)
+        update_user_settings(user_id, False, "")
         waiting_for_zip_password = False
-        waiting_password_for_user_id = None
+        if waiting_password_for_user_id == user_id:
+            waiting_password_for_user_id = None
 
         await message.reply_text(
             "Safe Mode غیرفعال شد.\n\n"
@@ -903,10 +950,7 @@ async def text_handler(client: Client, message: Message):
             await message.reply_text("رمز نمی‌تواند خالی باشد. لطفاً یک رمز معتبر ارسال کنید.")
             return
 
-        settings = load_settings()
-        settings["safe_mode"] = True
-        settings["zip_password"] = password
-        save_settings(settings)
+        update_user_settings(message.from_user.id, True, password)
 
         waiting_for_zip_password = False
         waiting_password_for_user_id = None
@@ -925,7 +969,7 @@ async def text_handler(client: Client, message: Message):
     if not url or not is_direct_url(url):
         return
 
-    settings = load_settings()
+    user_settings = get_user_settings(message.from_user.id if message.from_user else 0)
 
     status = await message.reply_text(
         "لینک دریافت شد.\n\n"
@@ -937,8 +981,8 @@ async def text_handler(client: Client, message: Message):
         "url": url,
         "chat_id": message.chat.id,
         "status_message_id": status.id,
-        "safe_mode": settings.get("safe_mode", False),
-        "zip_password": settings.get("zip_password", ""),
+        "safe_mode": user_settings.get("safe_mode", False),
+        "zip_password": user_settings.get("zip_password", ""),
     }
     draft_id = create_pending_draft(task, message.from_user.id if message.from_user else 0)
     await status.edit_text(
@@ -997,7 +1041,7 @@ async def media_handler(client: Client, message: Message):
             raise RuntimeError("Downloaded file not found.")
 
         file_size = downloaded_path.stat().st_size
-        settings = load_settings()
+        user_settings = get_user_settings(message.from_user.id if message.from_user else 0)
 
         task = {
             "type": "local_file",
@@ -1007,8 +1051,8 @@ async def media_handler(client: Client, message: Message):
             "status_message_id": status.id,
             "file_name": download_name,
             "file_size": file_size,
-            "safe_mode": settings.get("safe_mode", False),
-            "zip_password": settings.get("zip_password", ""),
+            "safe_mode": user_settings.get("safe_mode", False),
+            "zip_password": user_settings.get("zip_password", ""),
         }
         draft_id = create_pending_draft(task, message.from_user.id if message.from_user else 0)
         await status.edit_text(
