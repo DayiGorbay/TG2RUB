@@ -57,17 +57,19 @@ Telegram Bot -> Queue -> Download/Prepare -> Send to Rubika / Bale / Both
 
 ## 🛠 نصب سریع (Auto Install)
 
-ابتدا پروژه را دریافت کنید:
+نصب سریع پروژه:
 
 ```bash
-git clone https://github.com/DayiGorbay/TG2Rub.git
-cd TG2Rub
+bash <(curl -s https://raw.githubusercontent.com/DayiGorbay/TG2RUB/main/install.sh)
 ```
 
-نصب خودکار (ساخت venv، نصب dependencies، ساخت .env، ساخت سرویس systemd):
+یا روش دستی (zip):
 
 ```bash
-bash install.sh
+unzip TG2RUB.zip
+cd TG2RUB
+chmod +x install.sh
+./install.sh
 ```
 
 برای مدیریت سرویس:
