@@ -3,15 +3,15 @@ set -euo pipefail
 
 PROJECT_NAME="TG2RUB"
 SERVICE_NAME="tg2rub"
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_DIR="/opt/TG2RUB"
+REPO_URL="https://github.com/DayiGorbay/TG2RUB.git"
+PROJECT_ROOT="${INSTALL_DIR}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 RUN_USER="${SUDO_USER:-$(whoami)}"
 
 echo "==== ${PROJECT_NAME} Installer ===="
 echo "Project: ${PROJECT_NAME}"
-echo "Path: ${PROJECT_ROOT}"
-
-cd "${PROJECT_ROOT}"
+echo "Target Path: ${PROJECT_ROOT}"
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "Please run as root: sudo bash install.sh"
@@ -21,8 +21,22 @@ fi
 if command -v apt-get >/dev/null 2>&1; then
   echo "Installing system prerequisites..."
   apt-get update -y
-  apt-get install -y python3 python3-venv python3-pip
+  apt-get install -y python3 python3-venv python3-pip git
 fi
+
+if [ ! -d "${PROJECT_ROOT}" ]; then
+  mkdir -p "${PROJECT_ROOT}"
+fi
+
+if [ ! -f "${PROJECT_ROOT}/requirements.txt" ]; then
+  echo "Project files not found in ${PROJECT_ROOT}. Cloning repository..."
+  rm -rf "${PROJECT_ROOT}"
+  git clone "${REPO_URL}" "${PROJECT_ROOT}"
+else
+  echo "Project files found in ${PROJECT_ROOT}. Using existing files."
+fi
+
+cd "${PROJECT_ROOT}"
 
 if command -v python3 >/dev/null 2>&1; then
   PYTHON_BIN="python3"
