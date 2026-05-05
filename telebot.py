@@ -1301,6 +1301,7 @@ async def text_handler(client: Client, message: Message):
         "status_message_id": status.id,
         "safe_mode": user_settings.get("safe_mode", False),
         "zip_password": user_settings.get("zip_password", ""),
+        "enqueued_at": float(getattr(message, "date", None).timestamp()) if getattr(message, "date", None) else time.time(),
     }
     draft_id = create_pending_draft(task, message.from_user.id if message.from_user else 0)
     await status.edit_text(
@@ -1372,6 +1373,7 @@ async def media_handler(client: Client, message: Message):
             "file_size": file_size,
             "safe_mode": user_settings.get("safe_mode", False),
             "zip_password": user_settings.get("zip_password", ""),
+            "enqueued_at": float(getattr(message, "date", None).timestamp()) if getattr(message, "date", None) else time.time(),
         }
         draft_id = create_pending_draft(task, message.from_user.id if message.from_user else 0)
         await status.edit_text(

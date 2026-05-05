@@ -257,9 +257,7 @@ def send_with_retry(file_path: str, caption: str = "", task: dict | None = None)
                     task,
                     f"{phase_title}: در حال ارسال...\n\n"
                     f"🔴 تلاش {attempt} از {MAX_RETRIES}\n\n"
-                    f"⏱ محدودیت تلاش: {get_per_attempt_timeout(file_path)}s\n\n"
-                    f"برای لغو ارسال:\n"
-                    f"`/del {task.get('job_id')}`",
+                    f"⏱ محدودیت تلاش: {get_per_attempt_timeout(file_path)}s",
                     "uploading"
                 )
 
@@ -442,13 +440,19 @@ def pop_first_task():
 
     selected_task = None
     selected_index = None
+    selected_priority = None
     for index, line in enumerate(lines):
         try:
-            selected_task = json.loads(line)
-            selected_index = index
-            break
+            item = json.loads(line)
         except json.JSONDecodeError:
             continue
+        enqueue_time = float(item.get("enqueued_at", 0) or 0)
+        # اولویت با زمان enqueue کمتر (قدیمی‌تر) است؛ در تساوی ترتیب خط حفظ می‌شود.
+        priority = (enqueue_time if enqueue_time > 0 else float("inf"), index)
+        if selected_priority is None or priority < selected_priority:
+            selected_priority = priority
+            selected_task = item
+            selected_index = index
 
     if selected_task is None:
         with open(QUEUE_FILE, "w", encoding="utf-8") as file:
@@ -529,6 +533,10 @@ def process_task(task: dict):
             send_targets = split_to_zip_parts(send_path, SPLIT_PART_BYTES, split_password)
             cleanup_paths.extend(send_targets)
 
+        total_send_bytes = sum(path.stat().st_size for path in send_targets)
+        sent_rubika_bytes = 0
+        sent_bale_bytes = 0
+
         for index, target_path in enumerate(send_targets, start=1):
             part_caption = caption
             if len(send_targets) > 1:
@@ -541,15 +549,18 @@ def process_task(task: dict):
                     f"🟦 شروع ارسال به روبیکا...\n\n"
                     f"فایل: `{target_path.name}`\n"
                     f"حجم: `{pretty_size(target_path.stat().st_size)}`"
-                    + (f"\nپارت: `{index}/{len(send_targets)}`" if len(send_targets) > 1 else ""),
+                    + (f"\nپارت: `{index}/{len(send_targets)}`" if len(send_targets) > 1 else "")
+                    + f"\nارسال‌شده: `{pretty_size(sent_rubika_bytes)}` از `{pretty_size(total_send_bytes)}`",
                     "uploading",
                 )
                 send_with_retry(str(target_path), part_caption, task)
+                sent_rubika_bytes += target_path.stat().st_size
                 inc_metric("rubika_uploads", 1)
                 push_status(
                     task,
                     f"✅ ارسال روبیکا انجام شد.\n\n"
-                    + (f"پارت: `{index}/{len(send_targets)}`" if len(send_targets) > 1 else "آماده مرحله بعد..."),
+                    + (f"پارت: `{index}/{len(send_targets)}`\n" if len(send_targets) > 1 else "")
+                    + f"ارسال‌شده: `{pretty_size(sent_rubika_bytes)}` از `{pretty_size(total_send_bytes)}`",
                     "uploading",
                 )
 
@@ -580,16 +591,19 @@ def process_task(task: dict):
                         f"گیرنده: `{bale_chat_id}`\n"
                         f"فایل: `{target_path.name}`\n"
                         f"حجم: `{pretty_size(size_bytes)}`"
-                        + (f"\nپارت: `{index}/{len(send_targets)}`" if len(send_targets) > 1 else ""),
+                        + (f"\nپارت: `{index}/{len(send_targets)}`" if len(send_targets) > 1 else "")
+                        + f"\nارسال‌شده: `{pretty_size(sent_bale_bytes)}` از `{pretty_size(total_send_bytes)}`",
                         "uploading",
                     )
                     send_bale_with_retry(str(target_path), bale_chat_id, part_caption, task)
+                    sent_bale_bytes += size_bytes
                     inc_metric("bale_uploads", 1)
                     push_status(
                         task,
                         f"✅ ارسال بله انجام شد.\n\n"
-                        f"گیرنده: `{bale_chat_id}`"
-                        + (f"\nپارت: `{index}/{len(send_targets)}`" if len(send_targets) > 1 else ""),
+                        f"گیرنده: `{bale_chat_id}`\n"
+                        + (f"پارت: `{index}/{len(send_targets)}`\n" if len(send_targets) > 1 else "")
+                        + f"ارسال‌شده: `{pretty_size(sent_bale_bytes)}` از `{pretty_size(total_send_bytes)}`",
                         "uploading",
                     )
 
