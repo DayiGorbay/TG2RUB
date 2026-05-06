@@ -1368,6 +1368,7 @@ async def media_handler(client: Client, message: Message):
         task = {
             "type": "local_file",
             "path": str(downloaded_path),
+            "temp_file": True,
             "caption": message.caption or "",
             "chat_id": message.chat.id,
             "status_message_id": status.id,

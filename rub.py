@@ -499,6 +499,8 @@ def process_task(task: dict):
 
         if not local_path.exists():
             raise RuntimeError("Local file not found.")
+        if task.get("temp_file", False):
+            cleanup_paths.append(local_path)
 
     elif task_type == "direct_url":
         local_path = download_url(task)
